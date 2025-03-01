@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RC Tank Control</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/nipplejs/0.10.1/nipplejs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+
+    <style>
+      :root {
+        --terminal-bg: #1e1e1e;
+        --terminal-text: #cccccc;
+        --terminal-accent: #3a3d41;
+        --pad-bg: #252526;
+        --pad-border: #3a3d41;
+        --header-bg: #333333;
+        --header-text: #ffffff;
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: "Menlo", "Monaco", "Courier New", monospace;
+        background-color: #1e1e1e;
+        color: var(--terminal-text);
+        height: 100vh;
+        width: 100vw;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+      }
+
+      header {
+        background-color: var(--header-bg);
+        color: var(--header-text);
+        padding: 8px 16px;
+        font-size: 18px;
+        font-weight: bold;
+        border-bottom: 1px solid #555;
+        height: 40px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .connection-status {
+        display: flex;
+        align-items: center;
+        font-size: 14px;
+        font-weight: normal;
+      }
+
+      .status-indicator {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        display: inline-block;
+        margin-right: 8px;
+        background-color: red;
+      }
+
+      .status-indicator.connected {
+        background-color: #3bba54;
+      }
+
+      main {
+        flex: 1;
+        display: flex;
+        height: calc(100vh - 40px);
+      }
+
+      .video-container {
+        flex: 6;
+        background-color: #000;
+        position: relative;
+        overflow: hidden;
+        border-right: 1px solid var(--terminal-accent);
+      }
+
+      #videoFeed {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      .right-panel {
+        flex: 4;
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        position: relative;
+      }
+
+      .terminal {
+        flex: 1;
+        background-color: var(--terminal-bg);
+        color: var(--terminal-text);
+        font-family: "Menlo", "Monaco", "Courier New", monospace;
+        padding: 8px;
+        overflow-y: auto;
+        height: calc(100% - 320px);
+        border-bottom: 1px solid var(--terminal-accent);
+      }
+
+      .terminal-content {
+        width: 100%;
+        height: 100%;
+        overflow-y: auto;
+      }
+
+      .terminal-line {
+        line-height: 1.4;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        padding: 1px 0;
+        font-size: 14px;
+      }
+
+      .control-container {
+        height: 320px;
+        width: 100%;
+        background-color: var(--pad-bg);
+        display: flex;
+        flex-direction: column;
+        position: relative;
+      }
+
+      .control-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 6px 12px;
+        border-bottom: 1px solid var(--terminal-accent);
+        font-size: 14px;
+        height: 30px;
+      }
+
+      .trackpad-container {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 290px;
+        padding: 8px;
+      }
+
+      .trackpad {
+        width: 274px;
+        height: 274px;
+        background-color: rgba(255, 255, 255, 0.05);
+        border: 1px solid var(--pad-border);
+        border-radius: 4px;
+        position: relative;
+        touch-action: none;
+      }
+
+      .button-row {
+        position: absolute;
+        bottom: 12px;
+        left: 0;
+        width: 100%;
+        display: flex;
+        justify-content: space-around;
+        padding: 0 10px;
+      }
+
+      button {
+        padding: 8px 16px;
+        background-color: #2d2d2d;
+        color: white;
+        border: 1px solid #3e3e3e;
+        border-radius: 3px;
+        cursor: pointer;
+        font-size: 14px;
+        font-family: inherit;
+        transition: background-color 0.2s;
+      }
+
+      button:hover,
+      button:active {
+        background-color: #3e3e3e;
+      }
+
+      button.danger {
+        background-color: #5a1d1d;
+        border-color: #6e2727;
+      }
+
+      button.danger:hover,
+      button.danger:active {
+        background-color: #6e2727;
+      }
+
+      .telemetry {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        background-color: rgba(0, 0, 0, 0.6);
+        padding: 8px;
+        border-radius: 4px;
+        font-size: 14px;
+        color: white;
+        z-index: 10;
+      }
+
+      .telemetry-item {
+        margin-bottom: 4px;
+      }
+
+      .direction-indicator {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        background-color: rgba(0, 0, 0, 0.6);
+        padding: 8px;
+        border-radius: 4px;
+        font-size: 14px;
+        font-weight: bold;
+        color: white;
+        z-index: 10;
+      }
+
+      /* For iPad optimization */
+      @media only screen and (min-device-width: 768px) and (max-device-width: 1024px) {
+        .trackpad {
+          width: 264px;
+          height: 264px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <span>RC Tank Control Interface</span>
+      <div class="connection-status">
+        <span id="connectionIndicator" class="status-indicator"></span>
+        <span id="connectionStatus">Disconnected</span>
+      </div>
+    </header>
+    <main>
+      <div class="video-container">
+        <img
+          id="videoFeed"
+          src="http://10.135.200.223:8000/video"
+          style="width: 100%; height: 100%; object-fit: cover"
+        />
+
+        <div class="direction-indicator" id="directionIndicator">STOPPED</div>
+        <div class="telemetry">
+          <div class="telemetry-item">
+            Speed: <span id="speedValue">0</span>%
+          </div>
+          <div class="telemetry-item">
+            Battery: <span id="batteryValue">--</span>%
+          </div>
+        </div>
+      </div>
+
+      <div class="right-panel">
+        <div class="terminal">
+          <div id="terminalContent" class="terminal-content"></div>
+        </div>
+
+        <div class="control-container">
+          <div class="control-header">
+            <span>Movement Control</span>
+          </div>
+          <div class="trackpad-container">
+            <div id="trackpad" class="trackpad"></div>
+          </div>
+          <div class="button-row">
+            <button id="connectButton">Connect</button>
+            <button id="emergencyStopButton" class="danger">
+              EMERGENCY STOP
+            </button>
+            <button
+              onclick="fetch('/toggle_overlay').then(response => response.text())"
+            >
+              Toggle Overlay
+            </button>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <script>
+      // Configuration
+
+      const config = {
+        serverUrl: `http://192.168.4.1:9000`,
+        videoUrl: `http://192.168.4.1:8000/video`,
+
+        updateInterval: 50,
+        maxTerminalLines: 1000,
+      };
+
+      // WebSocket connection
+      let socket = null;
+      let connected = false;
+      let controlInterval = null;
+      let deadzone = 0.15; // Deadzone for joystick control
+
+      // Control state
+      const controlState = {
+        forward: 0, // -100 to 100 (negative for backward)
+        turn: 0, // -100 to 100 (negative for left)
+      };
+
+      // DOM Elements
+      const connectButton = document.getElementById("connectButton");
+      const emergencyStopButton = document.getElementById(
+        "emergencyStopButton"
+      );
+      const connectionStatus = document.getElementById("connectionStatus");
+      const connectionIndicator = document.getElementById(
+        "connectionIndicator"
+      );
+      const speedValue = document.getElementById("speedValue");
+      const batteryValue = document.getElementById("batteryValue");
+      const videoFeed = document.getElementById("videoFeed");
+      const terminalContent = document.getElementById("terminalContent");
+      const directionIndicator = document.getElementById("directionIndicator");
+
+      // Initialize trackpad
+      const trackpad = nipplejs.create({
+        zone: document.getElementById("trackpad"),
+        mode: "static",
+        position: { left: "50%", top: "50%" },
+        color: "#888",
+        size: 120,
+      });
+
+      // Setup event listeners
+      connectButton.addEventListener("click", toggleConnection);
+      emergencyStopButton.addEventListener("click", emergencyStop);
+
+      // Trackpad event handling
+      trackpad.on("move", (evt, data) => {
+        // Get position from joystick
+        // We need to correctly map this to tank controls
+
+        // Extract x and y coordinates (-1 to 1)
+        // Normalize to ensure proper control mapping
+        const y =
+          -1 *
+          Math.min(data.distance / 60, 1) *
+          Math.cos(data.angle.radian - Math.PI / 2);
+        const x =
+          -1 *
+          Math.min(data.distance / 60, 1) *
+          Math.sin(data.angle.radian - Math.PI / 2);
+
+        // Map y to forward/backward (-100 to 100)
+        // Map x to turning left/right (-100 to 100)
+        let forward = -y * 100; // Negative because joystick y is inverted
+        if (Math.abs(y) < deadzone) {
+          forward = 0; // Deadzone - no movement
+        }
+
+        // Add a "deadzone" for turning to allow for small deviations
+        // If x is within ±10% of center, consider it a straight movement
+        let turn = x * 100;
+        if (Math.abs(x) < deadzone) {
+          turn = 0; // Deadzone - no turning
+        }
+
+        controlState.forward = Math.round(forward);
+        controlState.turn = Math.round(turn);
+
+        // Update speed display and direction indicator
+        // Make sure speed is shown as 100% when fully pushed
+        updateSpeedDisplay(Math.abs(Math.round(forward)));
+        updateDirectionIndicator(forward, turn);
+      });
+
+      trackpad.on("end", () => {
+        // Reset controls when trackpad is released
+        controlState.forward = 0;
+        controlState.turn = 0;
+        updateSpeedDisplay(0);
+        updateDirectionIndicator(0, 0);
+      });
+
+      // Functions
+      function toggleConnection() {
+        if (connected) {
+          disconnect();
+        } else {
+          connect();
+        }
+      }
+
+      function connect() {
+        try {
+          addTerminalLine("Initializing connection to tank...");
+
+          socket = io(config.serverUrl, { transports: ["websocket"] });
+
+          socket.on("connect", () => {
+            connected = true;
+            updateConnectionStatus("Connected", true);
+            connectButton.textContent = "Disconnect";
+            addTerminalLine("Connection established!");
+            controlInterval = setInterval(
+              sendControlData,
+              config.updateInterval
+            );
+          });
+
+          socket.on("disconnect", () => {
+            addTerminalLine("Connection closed.");
+            handleDisconnect();
+          });
+
+          socket.on("log", (message) => {
+            addTerminalLine(message);
+          });
+
+          socket.on("telemetry", (data) => {
+            updateTelemetry(data);
+            console.log(data);
+          });
+
+          socket.on("emergency_stop_activated", () => {
+            addTerminalLine("!! EMERGENCY STOP ACTIVATED !!");
+          });
+
+          socket.on("connect_error", (error) => {
+            addTerminalLine("WebSocket connection error.");
+            console.error("WebSocket connection error:", error);
+            handleDisconnect();
+          });
+        } catch (error) {
+          addTerminalLine(`Connection error: ${error.message}`);
+          console.error("Connection error:", error);
+          handleDisconnect();
+        }
+      }
+
+      function disconnect() {
+        addTerminalLine("Disconnecting from tank...");
+        if (socket) {
+          socket.close();
+        }
+        handleDisconnect();
+      }
+
+      function handleDisconnect() {
+        connected = false;
+        updateConnectionStatus("Disconnected", false);
+        connectButton.textContent = "Connect";
+
+        if (controlInterval) {
+          clearInterval(controlInterval);
+          controlInterval = null;
+        }
+
+        // Reset control state
+        controlState.forward = 0;
+        controlState.turn = 0;
+
+        updateSpeedDisplay(0);
+        batteryValue.textContent = "--";
+        updateDirectionIndicator(0, 0);
+      }
+
+      function updateConnectionStatus(status, isConnected) {
+        connectionStatus.textContent = status;
+        if (isConnected) {
+          connectionIndicator.classList.add("connected");
+        } else {
+          connectionIndicator.classList.remove("connected");
+        }
+      }
+
+      function sendControlData() {
+        if (!connected || !socket) return;
+
+        const message = JSON.stringify({
+          type: "control",
+          data: controlState,
+        });
+        socket.emit("control", controlState);
+      }
+
+      function handleServerMessage(messageData) {
+        try {
+          const message = JSON.parse(messageData);
+
+          switch (message.type) {
+            case "telemetry":
+              updateTelemetry(message.data);
+              break;
+            case "log":
+              addTerminalLine(message.data);
+              break;
+            case "emergency_stop_activated":
+              addTerminalLine("!! EMERGENCY STOP ACTIVATED !!");
+              break;
+            default:
+              // console.log('Unknown message type:', message.type);
+              break;
+          }
+        } catch (error) {
+          console.error("Error parsing message:", error);
+        }
+      }
+
+      function updateTelemetry(data) {
+        if (data.battery !== undefined) {
+          batteryValue.textContent = data.battery;
+        }
+
+        // You can add more telemetry data processing here
+      }
+
+      function updateSpeedDisplay(speed) {
+        // Ensure we display full 100% when at max speed
+        if (speed > 99) {
+          speed = 100;
+        }
+        speedValue.textContent = Math.abs(Math.round(speed));
+      }
+
+      function updateDirectionIndicator(forward, turn) {
+        let direction = "STOPPED";
+
+        if (Math.abs(forward) < 10 && Math.abs(turn) < 10) {
+          direction = "STOPPED";
+        } else if (forward > 10 && Math.abs(turn) < 30) {
+          direction = "FORWARD";
+        } else if (forward < -10 && Math.abs(turn) < 30) {
+          direction = "BACKWARD";
+        } else if (forward > 10 && turn > 30) {
+          direction = "FORWARD RIGHT";
+        } else if (forward > 10 && turn < -30) {
+          direction = "FORWARD LEFT";
+        } else if (forward < -10 && turn > 30) {
+          direction = "BACKWARD RIGHT";
+        } else if (forward < -10 && turn < -30) {
+          direction = "BACKWARD LEFT";
+        } else if (Math.abs(forward) < 30 && turn > 30) {
+          direction = "TURN RIGHT";
+        } else if (Math.abs(forward) < 30 && turn < -30) {
+          direction = "TURN LEFT";
+        }
+
+        directionIndicator.textContent = direction;
+      }
+
+      function emergencyStop() {
+        addTerminalLine("!! EMERGENCY STOP INITIATED !!");
+        controlState.forward = 0;
+        controlState.turn = 0;
+        updateSpeedDisplay(0);
+        updateDirectionIndicator(0, 0);
+
+        if (connected && socket) {
+          const message = JSON.stringify({
+            type: "emergency_stop",
+          });
+
+          socket.emit("emergency_stop", message);
+        }
+      }
+
+      function addTerminalLine(text) {
+        const timestamp = new Date().toLocaleTimeString();
+        const newLine = document.createElement("div");
+        newLine.className = "terminal-line";
+        newLine.textContent = `[${timestamp}] ${text}`;
+        terminalContent.appendChild(newLine);
+
+        // Trim old lines if there are too many
+        while (terminalContent.children.length > config.maxTerminalLines) {
+          terminalContent.removeChild(terminalContent.firstChild);
+        }
+
+        // Auto-scroll to bottom (VS Code terminal behavior)
+        terminalContent.scrollTop = terminalContent.scrollHeight;
+      }
+
+      function setupVideoStream() {
+        // Set up MJPEG stream
+        videoFeed.src = config.videoUrl;
+        addTerminalLine("Video stream initialized.");
+
+        videoFeed.onerror = (error) => {
+          addTerminalLine(
+            `Video stream error: ${error.message || "Unknown error"}`
+          );
+          // Fallback for testing UI
+          videoFeed.poster = "/api/placeholder/800/600";
+        };
+      }
+
+      // Generate sample terminal output for demonstration
+      function generateSampleTerminalOutput() {
+        const sampleLines = [];
+
+        sampleLines.forEach((line) => {
+          addTerminalLine(line);
+        });
+      }
+
+      // Initialize the interface
+      function init() {
+        // Add initial terminal messages
+        generateSampleTerminalOutput();
+
+        // Update the UI
+        updateConnectionStatus("Disconnected", false);
+        updateSpeedDisplay(0);
+        updateDirectionIndicator(0, 0);
+
+        // For development/testing
+        videoFeed.poster = "/api/placeholder/800/600";
+      }
+
+      // Prevent scrolling on iPad when using trackpad
+      document.addEventListener(
+        "touchmove",
+        function (e) {
+          if (e.target.closest("#trackpad")) {
+            e.preventDefault();
+          }
+        },
+        { passive: false }
+      );
+
+      // Start the application
+      window.addEventListener("load", init);
+    </script>
+  </body>
+</html>
