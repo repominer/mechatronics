@@ -6,11 +6,15 @@ from object_dection import ObjectDetection
 
 app = Flask(__name__)
 
+# Initialize the object detection with Arduino control
+# Make sure to use the correct Arduino port
+# Will still work if Arduino is not connected
 obj = ObjectDetection()
 
 # Shared frame buffer and lock
 object_overlay = True  # Start with overlay enabled
-detect_objects = False  # Start with object detection enabled
+detect_objects = True  # Start with object detection enabled
+auto_navigation = False  # Toggle for autonomous navigation
 latest_frame = None
 latest_boxes = []
 frame_lock = Lock()
@@ -25,6 +29,7 @@ def camera_inference_loop():
     while True:
         success, frame = cap.read()
         if not success:
+            print('Error reading frame')
             break
 
         # Always keep the raw frame (no boxes)
@@ -32,7 +37,15 @@ def camera_inference_loop():
             latest_frame = frame.copy()
 
         # Run inference to get boxes (but not draw them)
-        latest_boxes = obj.inference(frame) if detect_objects else []
+        # If auto_navigation is enabled, this will also send commands to Arduino
+        if detect_objects:
+            latest_boxes = obj.inference(frame)
+        else:
+            latest_boxes = []
+            # Send stop command if detection is disabled
+            if auto_navigation:
+                obj.send_arduino_command("S")
+
 
     cap.release()
 
@@ -82,5 +95,49 @@ def toggle_overlay():
     object_overlay = not object_overlay
     return f"Overlay {'enabled' if object_overlay else 'disabled'}"
 
+@app.route('/toggle_detection')
+def toggle_detection():
+    global detect_objects
+    detect_objects = not detect_objects
+    return f"Object detection {'enabled' if detect_objects else 'disabled'}"
+
+@app.route('/toggle_navigation')
+def toggle_navigation():
+    global auto_navigation
+    auto_navigation = not auto_navigation
+    status = 'enabled' if auto_navigation else 'disabled'
+    print(f"Autonomous navigation {status}")
+    return f"Autonomous navigation {status}"
+
+@app.route('/toggle_arduino')
+def toggle_arduino():
+    obj.arduino_enabled = not obj.arduino_enabled
+    status = 'enabled' if obj.arduino_enabled else 'disabled'
+    if obj.arduino_enabled and not obj.arduino_connected:
+        obj.arduino_connected = obj.connect_to_arduino()
+    print(f"Arduino control {status}")
+    return f"Arduino control {status}"
+
+@app.route('/reconnect_arduino')
+def reconnect_arduino():
+    if obj.arduino_enabled:
+        success = obj.connect_to_arduino()
+        if success:
+            return "Arduino reconnected successfully"
+        else:
+            return "Failed to reconnect Arduino"
+    else:
+        return "Arduino control is disabled"
+
+@app.route('/emergency_stop')
+def emergency_stop():
+    obj.send_arduino_command("S")  # Emergency stop
+    return "Emergency stop activated"
+
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8000, threaded=True)
+    try:
+        app.run(host='0.0.0.0', port=8000, threaded=True)
+    except KeyboardInterrupt:
+        print("Server shutting down...")
+    finally:
+        obj.cleanup()  # Close Arduino connection on shutdown
