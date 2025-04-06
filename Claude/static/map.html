@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <title>Robot Map Navigation</title>
+    <link rel="stylesheet" href="map_style.css">
+</head>
+<body>
+    <h1>Robot Navigation Map</h1>
+    <div class="map-wrapper">
+        <div id="map-container">
+            <div id="robot"></div> </div>
+        <div id="info-panel">
+            <p>Selected Target: <span id="target-coords">None</span></p>
+            <p>Robot Position: <span id="robot-coords">(?, ?)</span> Angle: <span id="robot-angle">?</span>&deg;</p>
+            <button id="navigate-button" disabled>Navigate to Target</button>
+            <button id="clear-button">Clear Target</button>
+            <hr>
+    <button id="turn-90-right-button">Turn 90&deg; Right</button> 
+
+        </div>
+    </div>
+
+    <script src="map_script.js"></script>
+</body>
+</html>

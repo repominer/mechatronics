@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Robot Calibration</title>
+    <link rel="stylesheet" href="map_style.css">
+    <style>
+        /* Additional styles specific to calibration page */
+        body { padding: 20px; }
+        .calibration-section {
+            margin-bottom: 30px;
+            padding: 15px;
+            border: 1px solid #ccc;
+            background-color: #fff;
+            border-radius: 5px;
+        }
+        .calibration-section h2 { margin-top: 0; }
+        label { display: inline-block; min-width: 200px; margin-bottom: 5px;}
+        input[type="number"] { width: 80px; margin-left: 10px;}
+        button { margin: 5px; padding: 8px 12px; cursor: pointer;}
+        #calibration-log {
+            margin-top: 20px;
+            border: 1px dashed #aaa;
+            padding: 10px;
+            min-height: 50px;
+            background-color: #f9f9f9;
+        }
+    </style>
+</head>
+<body>
+    <h1>Robot Calibration</h1>
+    <p>Use the buttons to send a single command pulse to the robot. Measure the physical result and enter it below. Then apply the values.</p>
+    <p><a href="/">Back to Map</a></p>
+
+    <div class="calibration-section">
+        <h2>Movement Calibration (Forward/Backward)</h2>
+        <button id="calib-forward">Send Single Forward Pulse</button>
+        <button id="calib-backward">Send Single Backward Pulse</button>
+        <br>
+        <label for="measured-distance">Measured Distance Moved (Grid Units):</label>
+        <input type="number" id="measured-distance" step="0.01">
+        <p><em>(Note: Estimate how many grid cells the robot moved visually on the map, or calculate from real distance if you know cell size).</em></p>
+        <p>Current Simulation Value (`move_distance`): <strong id="current-move-distance">?</strong></p>
+    </div>
+
+    <div class="calibration-section">
+        <h2>Turning Calibration (Left/Right)</h2>
+        <button id="calib-left">Send Single Left Pulse</button>
+        <button id="calib-right">Send Single Right Pulse</button>
+        <br>
+        <label for="measured-angle">Measured Turn Angle (Degrees):</label>
+        <input type="number" id="measured-angle" step="0.1">
+        <p>Current Simulation Value (`turn_angle`): <strong id="current-turn-angle">?</strong>&deg;</p>
+    </div>
+
+    <div class="calibration-section">
+        <h2>Apply</h2>
+        <button id="apply-calibration">Apply Entered Calibration Values</button>
+        <p><em>(Note: These values apply only to the current session and are lost on restart.)</em></p>
+    </div>
+
+    <div id="calibration-log">
+        <strong>Log:</strong><br>
+    </div>
+
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="calibration_script.js"></script>
+</body>
+</html>

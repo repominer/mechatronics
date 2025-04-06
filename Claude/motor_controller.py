@@ -172,26 +172,40 @@ class MotorController:
         
         return True
 
+    
+
     def process_joystick_input(self, forward, turn):
         """
         Process joystick input and convert to motor commands.
-        
+        Calls send_command repeatedly for continuous movement/turning
+        if the joystick is held, allowing RobotMap to update.
+
         Args:
             forward: Forward/backward value (-1.0 to 1.0).
             turn: Left/right value (-1.0 to 1.0).
-            
+
         Returns:
-            command: The motor command sent (if any).
+            success: Whether a command was successfully sent.
         """
-        # Determine the current motion state based on joystick input
+        # Determine the discrete command based on current joystick values
         motion = self._determine_motion(forward, turn)
-        
-        # Only send the command if the state has changed
-        if motion != self.last_motion_state:
-            self.last_motion_state = motion
+
+        # Handle Stop command: Only send if state changes TO stop
+        if motion == self.CMD_STOP:
+            if self.last_motion_state != self.CMD_STOP:
+                self.last_motion_state = self.CMD_STOP
+                # Still use send_command for logging, rate limiting, and map update via wrapper
+                return self.send_command(self.CMD_STOP, "joystick")
+            else:
+                # Already stopped, do nothing
+                return False
+        else:
+            # Handle Movement commands (F, B, L, R): Always call send_command
+            # This ensures the wrapper in main.py calls robot_map.move() continuously
+            # The send_command method itself has rate limiting for identical commands
+            # if that's still desired for the hardware interface itself.
+            self.last_motion_state = motion # Update last state
             return self.send_command(motion, "joystick")
-        
-        return False
 
     def _determine_motion(self, forward, turn):
         """

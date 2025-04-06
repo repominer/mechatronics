@@ -36,7 +36,7 @@ class RobotMap:
         
         # Movement parameters
         self.move_distance = 0.2  # Grid cells per movement command
-        self.turn_angle = 15     # Degrees per turn command
+        self.turn_angle = 2     # Degrees per turn command
         
         # Track path history
         self.path = [(self.pos_x, self.pos_y)]
@@ -84,6 +84,42 @@ class RobotMap:
                     self.angle = 90
                     self.path = [(self.pos_x, self.pos_y)]
     
+    def apply_calibration(self, distance=None, angle=None):
+        """
+        Updates the simulation parameters based on calibration values.
+
+        Args:
+            distance (float, optional): The measured distance moved per F/B command pulse (in grid units).
+            angle (float, optional): The measured angle turned per L/R command pulse (in degrees).
+        """
+        updated = False
+        if distance is not None:
+            try:
+                dist_val = float(distance)
+                if dist_val > 0: # Basic validation
+                    # Potentially add locks here if map state is read by other threads often
+                    self.move_distance = dist_val
+                    logger.info(f"Calibration Applied: move_distance set to {self.move_distance:.3f}")
+                    updated = True
+                else:
+                    logger.warning(f"Ignoring invalid calibration distance: {dist_val}")
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Invalid distance value for calibration: {distance}, Error: {e}")
+
+        if angle is not None:
+            try:
+                angle_val = float(angle)
+                if angle_val > 0: # Basic validation
+                     # Potentially add locks here
+                    self.turn_angle = angle_val
+                    logger.info(f"Calibration Applied: turn_angle set to {self.turn_angle:.1f}")
+                    updated = True
+                else:
+                    logger.warning(f"Ignoring invalid calibration angle: {angle_val}")
+            except (ValueError, TypeError) as e:
+                 logger.warning(f"Invalid angle value for calibration: {angle}, Error: {e}")
+
+        return updated
     def _draw_grid(self):
         """Draw the grid"""
         # Fill background

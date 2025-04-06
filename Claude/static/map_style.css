@@ -1,0 +1,122 @@
+/* Basic reset and body styling */
+body {
+    font-family: sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin: 20px;
+    background-color: #f4f4f4;
+}
+
+h1 {
+    margin-bottom: 20px;
+}
+
+/* Wrapper for map and info panel */
+.map-wrapper {
+    display: flex;
+    align-items: flex-start; /* Align items to the top */
+    gap: 30px; /* Space between map and info */
+}
+
+/* Grid container styling */
+#map-container {
+    /* Grid dimensions set by JS using CSS variables */
+    display: grid;
+    grid-template-columns: repeat(var(--grid-size, 10), var(--cell-size, 30px));
+    grid-template-rows: repeat(var(--grid-size, 10), var(--cell-size, 30px));
+    width: calc(var(--grid-size, 10) * var(--cell-size, 30px));
+    height: calc(var(--grid-size, 10) * var(--cell-size, 30px));
+    border: 2px solid #555;
+    position: relative; /* Needed for absolute positioning of the robot */
+    background-color: #fff; /* White background for the grid */
+    margin: auto; /* Center if needed, but flex alignment might be better */
+}
+
+/* Individual grid cell styling */
+.grid-cell {
+    /* Cell size set by JS */
+    width: var(--cell-size, 30px);
+    height: var(--cell-size, 30px);
+    border: 1px solid #eee; /* Light border for cells */
+    box-sizing: border-box; /* Include border in size */
+    cursor: pointer;
+    transition: background-color 0.2s ease-in-out;
+}
+
+.grid-cell:hover {
+    background-color: #e0e0e0; /* Light gray hover effect */
+}
+
+/* Selected grid cell styling */
+.grid-cell.selected {
+    background-color: #4CAF50; /* Green background */
+    opacity: 0.8;
+}
+
+/* Robot icon styling (simple arrow) */
+#robot {
+    position: absolute;
+    /* Size relative to cell size */
+    width: 0;
+    height: 0;
+    border-left: calc(var(--cell-size, 30px) * 0.3) solid transparent;
+    border-right: calc(var(--cell-size, 30px) * 0.3) solid transparent;
+    border-bottom: calc(var(--cell-size, 30px) * 0.5) solid #ff0000; /* Red arrow */
+    /* Top/Left set by JS */
+    transform-origin: center calc(var(--cell-size, 30px) * 0.2); /* Adjust origin slightly for better visual center */
+    transition: transform 0.3s ease, top 0.3s ease, left 0.3s ease;
+    /* Prevent clicks on the robot itself interfering */
+    pointer-events: none;
+}
+/* Add this rule to map_style.css */
+
+#robot::after {
+    content: ''; /* Required for pseudo-elements */
+    position: absolute; /* Position relative to the #robot element */
+    width: 6px;       /* Size of the dot */
+    height: 6px;
+    background-color: #00ff00; /* Bright green color */
+    border-radius: 50%; /* Makes it a circle */
+
+    /* Positioning the dot at the tip of the triangle: */
+    /* The triangle's height is border-bottom = calc(var(--cell-size) * 0.5) */
+    /* We want to place the dot just above the base of the triangle (which is its top) */
+    /* Adjust top position relative to the triangle height and dot size */
+    top: calc(-1 * var(--cell-size, 30px) * 0.5 - 3px); /* (Moves up by triangle height, then up by half dot height) */
+
+    /* Center the dot horizontally relative to the #robot element's center */
+    left: 50%;
+    transform: translateX(-50%); /* Adjust horizontal position to true center */
+
+    /* Ensure the dot is visible */
+    z-index: 1;
+}
+
+/* Info panel styling */
+#info-panel {
+    border: 1px solid #ccc;
+    padding: 15px;
+    background-color: #fff;
+    border-radius: 5px;
+    min-width: 200px; /* Ensure it has some width */
+}
+
+#info-panel p {
+    margin: 5px 0;
+}
+
+#info-panel span {
+    font-weight: bold;
+}
+
+#info-panel button {
+    margin-top: 10px;
+    padding: 8px 12px;
+    cursor: pointer;
+}
+
+#info-panel button:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+}
