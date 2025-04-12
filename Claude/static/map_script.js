@@ -6,6 +6,28 @@ document.addEventListener('DOMContentLoaded', () => {
     const robotAngleSpan = document.getElementById('robot-angle');
     const navigateButton = document.getElementById('navigate-button');
     const clearButton = document.getElementById('clear-button');
+    const resetStartButton = document.getElementById('reset-start-button');  // New button
+    const updateCalibrationButton = document.getElementById('update-calibration-button');
+    const goUpButton = document.getElementById('go-up-button');
+    const turn90RightButton = document.getElementById('turn-90-right-button');
+    const turn90LeftButton = document.getElementById('turn-90-left-button');
+
+    // Obstacle mode controls
+    let obstacleMode = false;
+    const toggleObstaclesButton = document.getElementById('toggleObstaclesButton');
+    const resetObstaclesButton = document.getElementById('resetObstaclesButton');
+    const obstacleStatus = document.getElementById('obstacleStatus');
+
+    toggleObstaclesButton.addEventListener('click', () => {
+        obstacleMode = !obstacleMode;
+        obstacleStatus.textContent = obstacleMode ? "On" : "Off";
+        toggleObstaclesButton.textContent = obstacleMode ? "Exit Obstacle Mode" : "Toggle Obstacles Mode";
+    });
+
+    resetObstaclesButton.addEventListener('click', () => {
+        const gridCells = document.querySelectorAll('.grid-cell');
+        gridCells.forEach(cell => cell.classList.remove('obstacle'));
+    });
 
     // --- Configuration ---
     const GRID_SIZE = 20; // Match Python RobotMap grid_size if possible
@@ -19,6 +41,21 @@ document.addEventListener('DOMContentLoaded', () => {
     let socket = null; // To hold the socket instance
 
     // --- Initialization ---
+    const updateTimingButton = document.getElementById("update-timing-button");
+
+updateTimingButton.addEventListener("click", () => {
+    const forwardDelayInput = document.getElementById("forward-delay-input").value;
+    const turnLeftDelayInput = document.getElementById("turn-left-delay-input").value;
+    const turnRightDelayInput = document.getElementById("turn-right-delay-input").value;
+    const timingData = {
+        forward_delay: parseFloat(forwardDelayInput),
+        turn_left_delay: parseFloat(turnLeftDelayInput),
+        turn_right_delay: parseFloat(turnRightDelayInput)
+    };
+    socket.emit("update_timing", timingData);
+    console.log("Navigation timing update sent:", timingData);
+});
+
     function initMap() {
         document.documentElement.style.setProperty('--grid-size', GRID_SIZE);
         document.documentElement.style.setProperty('--cell-size', `${CELL_SIZE_PX}px`);
@@ -40,50 +77,64 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Robot Visuals ---
     function updateRobotVisuals(row, col, angle) {
-        const cellTop = row * CELL_SIZE_PX;
-        const cellLeft = col * CELL_SIZE_PX;
-        const robotTopOffset = CELL_SIZE_PX * 0.2;
-        const robotLeftOffset = CELL_SIZE_PX * 0.5;
-        robotElement.style.top = `${cellTop + robotTopOffset}px`;
-        robotElement.style.left = `${cellLeft + robotLeftOffset}px`;
-        const cssAngle = angle - 90;
-        robotElement.style.transform = `translateX(-50%) rotate(${cssAngle}deg)`;
-        // Update state (use precise values from backend if available)
-        currentRobotPos = { row: row, col: col };
+        // Compute the center of the cell.
+        const centerX = col * CELL_SIZE_PX + CELL_SIZE_PX / 2;
+        const centerY = row * CELL_SIZE_PX + CELL_SIZE_PX / 2;
+        
+        // Position the robot element centered in the cell.
+        robotElement.style.left = `${centerX}px`;
+        robotElement.style.top = `${centerY}px`;
+        
+        // Use transform translate(-50%, -50%) to center the element,
+        // then rotate. (Using 90 - angle here if that fits your telemetry direction.)
+        const cssAngle = 90 - angle;
+        robotElement.style.transform = `translate(-50%, -50%) rotate(${cssAngle}deg)`;
+    
+        // Update global state variables for display info.
+        currentRobotPos = { row, col };
         currentRobotAngle = angle;
-        updateInfoPanel(); // Update display text
+        updateInfoPanel();
     }
 
     // --- Cell Interaction ---
     function handleCellClick(event) {
         const clickedCell = event.target;
+        
+        // If obstacle mode is active, toggle the obstacle state instead of target selection.
+        if (obstacleMode) {
+            clickedCell.classList.toggle('obstacle');
+            updateObstacles();  // <-- Emit updated obstacles list here
+
+            return;
+        }
+        
+        // Otherwise, proceed with target selection.
         const row = parseInt(clickedCell.dataset.row);
         const col = parseInt(clickedCell.dataset.col);
-
+    
         if (clickedCell === currentSelectedCell) {
-            // Deselecting
+            // Deselecting the target.
             clickedCell.classList.remove('selected');
             currentSelectedCell = null;
             currentTarget = null;
-            if (socket) { // Also inform backend if target is cleared by re-clicking
+            if (socket) {
                 console.log('Target cleared by re-click, sending clear command');
-                socket.emit('clear_target'); // SEND CLEAR
+                socket.emit('clear_target');
             }
         } else {
-            // Selecting a new target
+            // Selecting a new target.
             if (currentSelectedCell) {
                 currentSelectedCell.classList.remove('selected');
             }
             clickedCell.classList.add('selected');
             currentSelectedCell = clickedCell;
             currentTarget = { row, col };
-             // Note: We don't emit 'navigate_to' on just a click, only on button press
-             console.log(`Target selected: Row ${row}, Col ${col}`);
+            console.log(`Target selected: Row ${row}, Col ${col}`);
         }
         updateInfoPanel();
         updateNavigateButtonState();
     }
-
+    
     // --- Info Panel & Button Updates ---
     function updateInfoPanel() {
         if (currentTarget) {
@@ -91,15 +142,15 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             targetCoordsSpan.textContent = 'None';
         }
-        // Display potentially fractional coordinates received from backend
-        robotCoordsSpan.textContent = `(${currentRobotPos.col.toFixed(1)}, ${currentRobotPos.row.toFixed(1)})`; // Note: col is x, row is y
+        // Display the robot's position as (row, col) to match the target format.
+        robotCoordsSpan.textContent = `(${currentRobotPos.row.toFixed(1)}, ${currentRobotPos.col.toFixed(1)})`;
         robotAngleSpan.textContent = `${currentRobotAngle.toFixed(1)}`;
     }
-
+    
     function updateNavigateButtonState() {
         navigateButton.disabled = !currentTarget;
     }
-
+    
     // --- Button Actions ---
     clearButton.addEventListener('click', () => {
         if (currentSelectedCell) {
@@ -109,47 +160,94 @@ document.addEventListener('DOMContentLoaded', () => {
         currentTarget = null;
         updateInfoPanel();
         updateNavigateButtonState();
-        if (socket) { // Check if socket exists
+        if (socket) {
             console.log('Sending clear target command via button');
-            socket.emit('clear_target'); // SEND CLEAR
+            socket.emit('clear_target');
         }
     });
-
+    
+    resetStartButton.addEventListener('click', () => {
+        console.log("Requesting reset of start position");
+        if (socket) {
+            socket.emit('reset_start');
+        } else {
+            alert("WebSocket is not connected!");
+        }
+    });
+    
     navigateButton.addEventListener('click', () => {
-        if (currentTarget && socket) { // Check if socket exists and target selected
+        if (currentTarget && socket) {
             console.log(`Sending navigation request to: Row ${currentTarget.row}, Col ${currentTarget.col}`);
-            socket.emit('navigate_to', { row: currentTarget.row, col: currentTarget.col }); // SEND TARGET
-            // Optional: Clear target visually after sending command? Depends on desired UX.
-            // clearButton.click();
+            socket.emit('navigate_to', { row: currentTarget.row, col: currentTarget.col });
         } else {
             console.error(`Cannot navigate: ${!currentTarget ? 'No target selected.' : 'WebSocket not ready.'}`);
             alert(`Cannot navigate: ${!currentTarget ? 'No target selected.' : 'WebSocket not ready.'}`);
         }
     });
+    
+    goUpButton.addEventListener('click', () => {
+        console.log("Requesting to go up 1 unit");
+        if (socket) {
+            socket.emit('go_up');
+        } else {
+            alert("WebSocket is not connected!");
+        }
+    });
+    
+    turn90RightButton.addEventListener('click', () => {
+        console.log("Requesting turn 90° right");
+        if (socket) {
+            socket.emit('turn_90_right');
+        } else {
+            alert("WebSocket is not connected!");
+        }
+    });
+turn90LeftButton.addEventListener('click', () => {
+    console.log("Requesting turn 90° Left");
+    if (socket) {
+        socket.emit('turn_90_left'); // Use exactly the same event name as on the server
+    } else {
+        alert("WebSocket is not connected!");
+    }
+});
 
+   
+    
     // --- WebSocket Setup ---
+    function updateObstacles() {
+    const gridCells = document.querySelectorAll('.grid-cell');
+    const obstacles = [];
+    gridCells.forEach(cell => {
+        if (cell.classList.contains('obstacle')) {
+        const r = parseInt(cell.dataset.row);
+        const c = parseInt(cell.dataset.col);
+        obstacles.push([r, c]);
+        }
+    });
+    socket.emit('update_obstacles', obstacles);
+    console.log("Obstacles sent:", obstacles);
+    }
+
     function setupWebSocket() {
         try {
-             // Ensure Socket.IO library is included in map.html
             const sock = io({
-                reconnectionAttempts: 5, // Example: Limit reconnection attempts
-                timeout: 10000 // Example: Connection timeout
+                reconnectionAttempts: 5,
+                timeout: 10000
             });
-
+    
             sock.on('connect', () => {
                 console.log(`Connected to WebSocket server with ID: ${sock.id}`);
-                // Potentially request initial state or confirm connection
             });
-
+    
             sock.on('disconnect', (reason) => {
                 console.log(`Disconnected from WebSocket server: ${reason}`);
             });
-
+    
             sock.on('connect_error', (error) => {
                 console.error('WebSocket connection error:', error);
             });
-
-            // Listen for robot pose updates (Phase 1)
+    
+            // Listen for robot pose updates
             sock.on('robot_update', (data) => {
                 if (data.row !== undefined && data.col !== undefined && data.angle !== undefined) {
                     updateRobotVisuals(data.row, data.col, data.angle);
@@ -157,27 +255,24 @@ document.addEventListener('DOMContentLoaded', () => {
                     console.warn("Received incomplete robot update data:", data);
                 }
             });
-
-             // Listen for log messages from server (optional but helpful)
+    
             sock.on('log', (logData) => {
                 if (logData && logData.msg) {
-                     console.log(`[Server Log] ${logData.msg}`);
+                    console.log(`[Server Log] ${logData.msg}`);
                 } else {
-                     console.log(`[Server Log] ${logData}`); // Handle plain string logs too
+                    console.log(`[Server Log] ${logData}`);
                 }
             });
-
-            return sock; // Return the socket instance
-
+    
+            return sock;
         } catch (e) {
             console.error("Failed to initialize WebSocket:", e);
             alert("Error connecting to WebSocket server. Please check console.");
-            return null; // Indicate failure
+            return null;
         }
     }
-
+    
     // --- Initial Setup ---
     initMap();
-    socket = setupWebSocket(); // Assign the returned socket instance
-
-}); // End DOMContentLoaded
+    socket = setupWebSocket();
+});

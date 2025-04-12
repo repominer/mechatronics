@@ -1,168 +1,172 @@
-# navigation.py
-import math
 import time
 import threading
 import logging
+import heapq
 
 logger = logging.getLogger('navigation')
-# Ensure logger output is visible
-# logging.basicConfig(level=logging.DEBUG) # Use DEBUG to see detailed Nav Steps
 
 class NavigationController:
     """
-    Handles navigation logic to move the robot towards a target point on the map
-    using only 90-degree turns (Manhattan movement: X then Y).
+    Navigation Controller that computes an optimal path using A* (Q* planning)
+    and guides the robot along that path using discrete motor commands.
+    
+    It uses the robot_map grid and a set of obstacles (stored as (row, col) tuples)
+    to compute the optimal path from the current position to the target.
+    
+    The computed path is then followed by rotating the robot to the correct orientation
+    and issuing a forward move for each grid cell.
     """
     def __init__(self, motor_controller, robot_map):
         if not motor_controller or not robot_map:
             raise ValueError("MotorController and RobotMap instances are required.")
-
         self.motor_controller = motor_controller
         self.robot_map = robot_map
         self.target = None
         self.is_navigating = False
         self._nav_thread = None
         self._lock = threading.Lock()
+        self.loop_delay = 0.2      # Delay used during turning
+        self.forward_delay = 2   # Delay after a forward command (adjust this to change per-unit movement)
+        self.obstacles = set()     # Set of (row, col) tuples representing obstacles
+        self.turn_left_delay = 1.95      # Delay for left turn
+        self.turn_right_delay = 1.95     # Delay for right turn
+        logger.info("NavigationController (optimal path planning) initialized.")
 
-        # --- Tuning Parameters ---
-        # Thresholds for considering alignment/position reached
-        self.position_threshold = 0.3 # How close for X or Y alignment
-        self.target_threshold = 0.5   # How close for final target reached
-        self.angle_threshold = 10.0   # Allowed angle deviation (degrees) for axis alignment
-        # Loop frequency control
-        self.loop_delay = 0.1 # seconds (10 Hz)
+    def update_timing(self, forward_delay=None, turn_left_delay=None, turn_right_delay=None):
+        """
+        Update the timing parameters for forward and turning commands.
+        """
+        with self._lock:
+            if forward_delay is not None:
+                self.forward_delay = forward_delay
+            if turn_left_delay is not None:
+                self.turn_left_delay = turn_left_delay
+            if turn_right_delay is not None:
+                self.turn_right_delay = turn_right_delay
+        logger.info(f"Navigation timing updated: forward {self.forward_delay}s, left {self.turn_left_delay}s, right {self.turn_right_delay}s")
 
-        logger.info("NavigationController initialized (90-Degree Turn Mode).")
+    @staticmethod
+    def manhattan(a, b):
+        return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+    @staticmethod
+    def get_neighbors(cell, grid_size, obstacles):
+        neighbors = []
+        row, col = cell
+        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            nr, nc = row + dr, col + dc
+            if 0 <= nr < grid_size and 0 <= nc < grid_size and ((nr, nc) not in obstacles):
+                neighbors.append((nr, nc))
+        return neighbors
+
+    @staticmethod
+    def a_star_search(start, goal, grid_size, obstacles):
+        open_set = []
+        heapq.heappush(open_set, (NavigationController.manhattan(start, goal), start))
+        came_from = {}
+        g_score = {start: 0}
+        while open_set:
+            current_f, current = heapq.heappop(open_set)
+            if current == goal:
+                path = []
+                while current in came_from:
+                    path.append(current)
+                    current = came_from[current]
+                path.append(start)
+                return path[::-1]
+            for neighbor in NavigationController.get_neighbors(current, grid_size, obstacles):
+                tentative_g = g_score[current] + 1  # cost per move is 1
+                if tentative_g < g_score.get(neighbor, float('inf')):
+                    came_from[neighbor] = current
+                    g_score[neighbor] = tentative_g
+                    f_score = tentative_g + NavigationController.manhattan(neighbor, goal)
+                    heapq.heappush(open_set, (f_score, neighbor))
+        return None
 
     def set_target(self, target_row, target_col):
+        """
+        Set a new navigation target. This method computes the optimal path using A*
+        and then starts a thread to follow the path.
+        """
         with self._lock:
             if target_row is None or target_col is None:
                 logger.warning("Invalid target provided: row or col is None.")
                 return
-            new_target = {'row': float(target_row), 'col': float(target_col)}
-            if new_target == self.target and self.is_navigating:
-                 logger.info(f"Target {new_target} is the same as current, navigation continues.")
-                 return
-
-            self.target = new_target
-            logger.info(f"Navigation target set to {self.target}")
-
+            self.target = {'row': float(target_row), 'col': float(target_col)}
+            logger.info(f"Optimal Navigation target set to {self.target}")
             if not self.is_navigating:
                 self.is_navigating = True
-                self.motor_controller.send_command(self.motor_controller.CMD_STOP, "nav_start")
+                self.motor_controller.send_command(self.motor_controller.CMD_STOP, "nav_optimal_start")
                 time.sleep(0.1)
-                self._nav_thread = threading.Thread(target=self._navigation_loop, daemon=True)
+                # Compute the optimal path using A*
+                start = (int(round(self.robot_map.pos_y)), int(round(self.robot_map.pos_x)))  # (row, col)
+                goal = (int(round(self.target['row'])), int(round(self.target['col'])))
+                grid_size = self.robot_map.grid_size
+                path = NavigationController.a_star_search(start, goal, grid_size, self.obstacles)
+                if path is None:
+                    logger.error("No path found to the target.")
+                    self.clear_target()
+                    return
+                logger.info(f"Optimal path computed: {path}")
+                # Start following the path in a new thread
+                self._nav_thread = threading.Thread(target=self.follow_path, args=(path,), daemon=True)
                 self._nav_thread.start()
+
+    def follow_path(self, path):
+        """
+        Follow the computed path by issuing discrete motor commands.
+        Uses time-based delays for turning, similar to the forward movement timing.
+        Each cell in the path is assumed to be 1 grid cell apart.
+        """
+        logger.info("Following optimal path (time-based turning)...")
+        for cell in path[1:]:  # Skip the starting cell.
+            current_row = int(round(self.robot_map.pos_y))
+            current_col = int(round(self.robot_map.pos_x))
+            target_row, target_col = cell
+            # Determine desired angle based on relative position.
+            if target_col > current_col:
+                desired_angle = 0      # Right
+            elif target_col < current_col:
+                desired_angle = 180    # Left
+            elif target_row < current_row:
+                desired_angle = 90     # Up
+            elif target_row > current_row:
+                desired_angle = 270    # Down
             else:
-                logger.info("Navigation already in progress, target updated.")
+                desired_angle = self.robot_map.angle  # Should not occur
+
+            current_angle = int(round(self.robot_map.angle)) % 360
+            # Calculate the minimal angular difference.
+            delta = (desired_angle - current_angle + 360) % 360
+
+            if delta < 5:
+                logger.info(f"Angle within tolerance: current {current_angle}° vs desired {desired_angle}° (diff: {delta}°)")
+            elif delta <= 180:
+                self.motor_controller.send_command(self.motor_controller.CMD_STOP, "nav_optimal_turn")
+                time.sleep(.5)  # Allow time for the robot to stop before turning
+                logger.info(f"Turning left: current {current_angle}° -> desired {desired_angle}° (diff: {delta}°)")
+                self.motor_controller.send_command(self.motor_controller.CMD_LEFT, "nav_optimal")
+                time.sleep(self.turn_left_delay)
+            else:
+                self.motor_controller.send_command(self.motor_controller.CMD_STOP, "nav_optimal_turn")
+                time.sleep(.5)  # Allow time for the robot to stop before turning
+                logger.info(f"Turning right: current {current_angle}° -> desired {desired_angle}° (diff: {360 - delta}°)")
+                self.motor_controller.send_command(self.motor_controller.CMD_RIGHT, "nav_optimal")
+                time.sleep(self.turn_right_delay)
+
+            # Move forward one cell.
+            self.motor_controller.send_command(self.motor_controller.CMD_FORWARD, "nav_optimal")
+            logger.info("Moving forward 1 unit along path.")
+            time.sleep(self.forward_delay)
+
+        # Path completed—stop the robot.
+        self.motor_controller.send_command(self.motor_controller.CMD_STOP, "nav_optimal_end")
+        logger.info("Optimal path following complete.")
+        self.clear_target()
 
     def clear_target(self):
         with self._lock:
-            if self.is_navigating or self.target:
-                logger.info("Clearing navigation target and stopping.")
             self.target = None
             self.is_navigating = False
-            self.motor_controller.send_command(self.motor_controller.CMD_STOP, "nav_clear")
-
-    def _normalize_angle_diff(self, diff):
-        """Normalize angle difference to the range [-180, 180]."""
-        diff = (diff + 180) % 360 - 180
-        return diff
-
-    def _navigation_loop(self):
-        logger.info("Navigation loop started (90-Degree Turn Mode).")
-
-        while True: # Loop controlled by self.is_navigating check inside
-            with self._lock:
-                if not self.is_navigating or not self.target:
-                    logger.debug("Navigation condition false, exiting loop.")
-                    self.is_navigating = False
-                    break
-                target_row = self.target['row']
-                target_col = self.target['col']
-
-            # --- Get Current State ---
-            try:
-                current_row = self.robot_map.pos_y
-                current_col = self.robot_map.pos_x
-                current_angle = self.robot_map.angle
-            except Exception as e:
-                logger.error(f"Error reading robot pose: {e}. Skipping step.")
-                time.sleep(self.loop_delay * 2)
-                continue
-
-            # --- Check if Overall Target Reached ---
-            # Using manhattan distance isn't quite right, use euclidean for final check
-            final_delta_row = target_row - current_row
-            final_delta_col = target_col - current_col
-            distance_to_target = math.sqrt(final_delta_row**2 + final_delta_col**2)
-
-            if distance_to_target < self.target_threshold:
-                logger.info(f"Target ({target_col:.1f}, {target_row:.1f}) reached! Dist: {distance_to_target:.2f}")
-                self.clear_target()
-                break
-
-            # --- Manhattan Navigation Logic (X first, then Y) ---
-            command = None
-            action = "Idle"
-            delta_col = target_col - current_col
-
-            # 1. Align and Move Horizontally (X / Column) first
-            if abs(delta_col) > self.position_threshold:
-                # Need to align/move in X direction
-                x_target_angle = 0.0 if delta_col > 0 else 180.0 # 0=Right (East), 180=Left (West)
-                angle_diff = self._normalize_angle_diff(x_target_angle - current_angle)
-
-                if abs(angle_diff) > self.angle_threshold:
-                    # Need to turn to face X direction
-                    command = self.motor_controller.CMD_LEFT if angle_diff > 0 else self.motor_controller.CMD_RIGHT
-                    action = f"Aligning X (Target Angle: {x_target_angle:.0f})"
-                else:
-                    # Aligned correctly, move forward in X direction
-                    command = self.motor_controller.CMD_FORWARD
-                    action = "Moving X"
-            else:
-                # X position is aligned, now handle Y position
-                delta_row = target_row - current_row # Recalculate delta_row needed here
-
-                if abs(delta_row) > self.position_threshold: # Need Y movement (check position threshold again)
-                     # Need to align/move in Y direction
-                    # Remember: Y increases downwards (row index increases)
-                    y_target_angle = 270.0 if delta_row > 0 else 90.0 # 270=Down (South), 90=Up (North)
-                    angle_diff = self._normalize_angle_diff(y_target_angle - current_angle)
-
-                    if abs(angle_diff) > self.angle_threshold:
-                        # Need to turn to face Y direction
-                        command = self.motor_controller.CMD_LEFT if angle_diff > 0 else self.motor_controller.CMD_RIGHT
-                        action = f"Aligning Y (Target Angle: {y_target_angle:.0f})"
-                    else:
-                        # Aligned correctly, move forward in Y direction
-                        command = self.motor_controller.CMD_FORWARD
-                        action = "Moving Y"
-                else:
-                     # Both X and Y are within position_threshold, but not target_threshold? Stop.
-                     # This might happen if thresholds are different.
-                     logger.info("X/Y position aligned but target threshold not met. Stopping.")
-                     command = self.motor_controller.CMD_STOP
-                     action = "Stopping near target"
-                     self.clear_target() # Clear target as we are stopping
-                     break # Exit loop
-
-
-            # --- Send Command ---
-            if command:
-                 logger.debug(f"Nav Step: Target=({target_col:.1f},{target_row:.1f}), "
-                             f"Current=({current_col:.1f},{current_row:.1f}), Angle={current_angle:.1f}, "
-                             #f"TargetAngle={target_angle_deg:.1f}, Diff={angle_diff:.1f}, " # Not relevant now
-                             f"Dist={distance_to_target:.1f}. Action: {action}")
-                 self.motor_controller.send_command(command, "navigation")
-            # No else needed, if command is None, no action is sent (e.g., if perfectly aligned but Y needs no move)
-
-
-            # --- Loop Delay ---
-            time.sleep(self.loop_delay)
-            # End of while loop
-
-        # Ensure motors are stopped when loop exits
-        self.motor_controller.send_command(self.motor_controller.CMD_STOP, "nav_loop_end")
-        logger.info("Navigation loop thread finished.")
+        self.motor_controller.send_command(self.motor_controller.CMD_STOP, "nav_optimal_clear")
+        logger.info("Optimal navigation target cleared.")

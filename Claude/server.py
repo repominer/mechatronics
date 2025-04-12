@@ -8,6 +8,7 @@ import time
 from flask import Flask, Response, render_template, send_from_directory, request
 from flask_socketio import SocketIO, emit
 from threading import Thread, Lock
+import base64
 
 # Configure logging
 logging.basicConfig(
@@ -224,6 +225,27 @@ class RCTankServer:
             logger.info(f"Client disconnected: {client_id}")
             # Note: Background task continues running
 
+        @self.socketio.on('apply_calibration')
+        def handle_apply_calibration(data):
+            log_msg = "Apply calibration ignored."
+            applied = False
+            if self.robot_map and isinstance(data, dict):
+                distance = data.get('distance')
+                angle = data.get('angle')
+                logger.info(f"Received calibration data: distance={distance}, angle={angle}")
+                applied = self.robot_map.update_values(distance, angle)
+                if applied:
+                    log_msg = "Calibration values updated successfully."
+                else:
+                    log_msg = "Failed to update calibration values. Check logs for details."
+            elif not self.robot_map:
+                log_msg = "Cannot update calibration: Robot map not available."
+                logger.warning(log_msg)
+            else:
+                log_msg = f"Invalid data format for calibration: {data}"
+                logger.warning(log_msg)
+            emit('calibration_log', {'msg': log_msg})
+
         @self.socketio.on('calibrate_command')
         def handle_calibrate_command(self, data):
             command = data.get('command')
@@ -280,6 +302,128 @@ class RCTankServer:
             # Send feedback
             emit('calibration_log', {'msg': log_msg})
 
+
+        @self.socketio.on('turn_90_left')
+        def handle_turn_90_left():
+            logger.info("Received turn 90° left command")
+            if self.motor_controller and self.robot_map and self.navigation_controller:
+                def turn_left_90():
+                    self.motor_controller.send_command(self.motor_controller.CMD_LEFT, "turn_90")
+                    time.sleep(self.navigation_controller.turn_left_delay)
+                    self.motor_controller.send_command(self.motor_controller.CMD_STOP, "turn_90")
+                    logger.info("Turn 90° left completed.")
+                thread = threading.Thread(target=turn_left_90, daemon=True)
+                thread.start()
+                emit('log', {'msg': 'Turn 90° left command initiated.'})
+            else:
+                emit('log', {'msg': 'Motor controller, robot map, or navigation controller not available.'})
+
+        
+        @self.socketio.on('turn_90_right')
+        def handle_turn_90_right():
+            logger.info("Received turn 90° right command")
+            # Ensure that motor_controller, robot_map, and navigation_controller are available.
+            if self.motor_controller and self.robot_map and self.navigation_controller:
+                def turn_right_90():
+                    # Send the right turn command.
+                    self.motor_controller.send_command(self.motor_controller.CMD_RIGHT, "turn_90")
+                    # Wait for the duration defined by the navigation controller.
+                    time.sleep(self.navigation_controller.turn_right_delay)
+                    # Stop the robot once the turn delay has elapsed.
+                    self.motor_controller.send_command(self.motor_controller.CMD_STOP, "turn_90")
+                    logger.info("Turn 90° right completed.")
+                thread = threading.Thread(target=turn_right_90, daemon=True)
+                thread.start()
+                emit('log', {'msg': 'Turn 90° right command initiated.'})
+            else:
+                emit('log', {'msg': 'Motor controller, robot map, or navigation controller not available.'})
+
+        @self.socketio.on('update_timing')
+        def handle_update_timing(data):
+            """
+            Update navigation timing parameters from the client.
+            Expects data to contain forward_delay, turn_left_delay, and turn_right_delay.
+            """
+            if self.navigation_controller:
+                forward_delay = data.get('forward_delay')
+                turn_left_delay = data.get('turn_left_delay')
+                turn_right_delay = data.get('turn_right_delay')
+                self.navigation_controller.update_timing(forward_delay, turn_left_delay, turn_right_delay)
+                emit('log', {'msg': f'Navigation timing updated: forward {forward_delay}s, left {turn_left_delay}s, right {turn_right_delay}s'})
+            else:
+                emit('log', {'msg': 'Navigation controller not available.'})
+
+        @self.socketio.on('update_obstacles')
+        def handle_update_obstacles(data):
+            """
+            Handle obstacle updates from the client.
+            Expects `data` to be a list of [row, col] pairs.
+            Updates the NavigationController's obstacles set.
+            """
+            try:
+                obstacles = {tuple(ob) for ob in data}  # Convert list of lists/tuples into a set of tuples.
+                if self.navigation_controller:
+                    self.navigation_controller.obstacles = obstacles
+                    emit('log', {'msg': f'Obstacles updated: {obstacles}'}, broadcast=True)
+                else:
+                    emit('log', {'msg': 'Navigation controller not available.'})
+            except Exception as e:
+                emit('log', {'msg': f'Failed to update obstacles: {e}'})
+
+
+        @self.socketio.on('reset_start')
+        def handle_reset_start():
+            logger.info("Received stop navigation command")
+            # Stop any ongoing navigation
+            if self.navigation_controller:
+                self.navigation_controller.clear_target()
+                logger.info("Navigation controller cleared target, stopping navigation thread.")
+            else:
+                logger.warning("Navigation controller not available.")
+            # Issue a stop command to the motor controller
+            if self.motor_controller:
+                self.motor_controller.send_command(self.motor_controller.CMD_STOP, "stop_navigation")
+                logger.info("Stop command sent to motor controller.")
+                emit('log', {'msg': 'Stop navigation command executed.'})
+            else:
+                emit('log', {'msg': 'Motor controller not available for stop command.'})
+            if self.robot_map:
+                self.robot_map.reset_position()
+                pose_data = {
+                    'col': self.robot_map.pos_x,
+                    'row': self.robot_map.pos_y,
+                    'angle': self.robot_map.angle
+                }
+                # Broadcast updated position to all clients
+                emit('robot_update', pose_data, broadcast=True)
+                emit('log', {'msg': 'Start position reset.'})
+            else:
+                emit('log', {'msg': 'Robot map not available for reset.'})
+
+        @self.socketio.on('go_up')
+        def handle_go_up():
+            logger.info("Received 'go up 1 unit' command")
+            if self.motor_controller and self.robot_map:
+                def go_up_command():
+                    # Force the robot orientation to 'up' (90°)
+                    self.robot_map.angle = 90
+                    # Calculate how many forward commands are needed to move 1 unit
+                    try:
+                        iterations = int(round(1.0 / self.robot_map.move_distance))
+                    except Exception as e:
+                        logger.error(f"Error computing iterations for go up: {e}")
+                        iterations = 5  # fallback value if move_distance is misconfigured
+                    logger.info(f"Moving up 1 unit in {iterations} steps.")
+                    for i in range(iterations):
+                        self.motor_controller.send_command(self.motor_controller.CMD_FORWARD, "go_up")
+                        time.sleep(self.motor_controller.command_cooldown)
+                    self.motor_controller.send_command(self.motor_controller.CMD_STOP, "go_up")
+                    logger.info("Go up 1 unit command completed.")
+                thread = threading.Thread(target=go_up_command, daemon=True)
+                thread.start()
+                emit('log', {'msg': 'Go up 1 unit command initiated.'})
+            else:
+                emit('log', {'msg': 'Motor controller or robot map not available.'})
 
         @self.socketio.on('request_calibration_values')
         def handle_request_calibration_values():
@@ -456,55 +600,73 @@ class RCTankServer:
 
             # Check if thread should stop? Not implemented, runs forever until server stops.
 
+  
+
     def _camera_thread(self):
-        """Background thread for camera capture and optional object detection"""
+        """Background thread for camera capture, object detection, and real-time video streaming over Socket.IO"""
         logger.info("Starting camera capture thread")
         try:
-            self.camera = cv2.VideoCapture(0)
+            self.camera = cv2.VideoCapture(1)
+            self.camera.set(cv2.CAP_PROP_BRIGHTNESS, 1.0)
+            self.camera.set(cv2.CAP_PROP_EXPOSURE, -4)
             if not self.camera.isOpened():
-                 logger.error("!!!!!!!! Failed to open camera !!!!!!!!")
-                 self.capture_running = False # Stop thread if camera fails
-                 return # Exit thread
-
+                logger.error("!!!!!!!! Failed to open camera !!!!!!!!")
+                self.capture_running = False
+                return
             self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.camera_width)
             self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, self.camera_height)
             logger.info("Camera opened successfully.")
-
         except Exception as e:
-             logger.error(f"!!!!!!!! Exception opening camera: {e} !!!!!!!!", exc_info=True)
-             self.capture_running = False
-             return
+            logger.error(f"!!!!!!!! Exception opening camera: {e} !!!!!!!!", exc_info=True)
+            self.capture_running = False
+            return
+
+        import base64  # Needed for encoding the JPEG frame
 
         while self.capture_running:
             try:
                 success, frame = self.camera.read()
                 if not success or frame is None:
                     logger.warning("Failed to read frame from camera, skipping cycle.")
-                    time.sleep(0.1) # Wait a bit before retrying
+                    time.sleep(0.1)
                     continue
 
                 # --- Object Detection ---
-                current_boxes = [] # Boxes for this frame
+                current_boxes = []  # Boxes for this frame
                 if self.detect_objects and self.object_detector:
                     try:
-                        # Run detection. Navigation command sending is handled inside inference
-                        # based on the detector's auto_navigation state.
                         current_boxes = self.object_detector.inference(frame)
                     except Exception as e:
                         logger.error(f"Error during object detection inference: {e}", exc_info=False)
                 # --- End Object Detection ---
 
-                # --- Update Shared Frame and Boxes ---
+                # Optionally overlay detection boxes if the overlay is enabled
+                if self.object_overlay and current_boxes:
+                    self._draw_boxes(frame, current_boxes)
+
+                cv2.imshow("Frame Preview", frame)
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    self.capture_running = False
+                    break
+                # Encode frame as JPEG then convert it to a base64 string
+                ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+                if ret:
+                    b64frame = base64.b64encode(buffer).decode('utf-8')
+                    # Emit the frame over Socket.IO on "video_frame" event
+                    self.socketio.emit('video_frame', b64frame)
+                else:
+                    logger.warning("Failed to encode frame to JPEG in camera thread.")
+
+                # Optionally update the shared frame buffers for legacy HTTP streaming or other uses
                 with self.frame_lock:
-                    self.latest_frame = frame.copy() # Store copy for streaming thread
-                    self.latest_boxes = current_boxes # Store boxes found in this frame
+                    self.latest_frame = frame.copy()
+                    self.latest_boxes = current_boxes
 
-                # Limit frame processing rate / yield CPU
-                time.sleep(0.03) # Aim for ~30fps max processing rate
-
+                # Control the frame rate (targeting ~30 fps)
+                time.sleep(0.03)
             except Exception as e:
-                 logger.error(f"Error in camera thread loop: {e}", exc_info=True)
-                 time.sleep(1) # Avoid spamming errors
+                logger.error(f"Error in camera thread loop: {e}", exc_info=True)
+                time.sleep(1)
 
         # Clean up camera when thread stops
         if self.camera:
@@ -512,7 +674,7 @@ class RCTankServer:
                 self.camera.release()
                 logger.info("Camera released.")
             except Exception as e:
-                 logger.error(f"Error releasing camera: {e}")
+                logger.error(f"Error releasing camera: {e}")
             self.camera = None
 
     def _draw_boxes(self, frame, boxes):

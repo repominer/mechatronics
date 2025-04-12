@@ -246,7 +246,6 @@
         <!-- Updated to use relative path -->
         <img
           id="videoFeed"
-          src="/video"
           style="width: 100%; height: 100%; object-fit: cover"
         />
 
@@ -292,347 +291,299 @@
     </main>
 
     <script>
-      // Configuration
-      const config = {
-        // Use the same port for both HTTP and WebSocket
-        serverUrl: `http://${window.location.hostname}:${window.location.port}`,
-        videoUrl: `/video`,
-        updateInterval: 50,
-        maxTerminalLines: 1000,
-      };
+  // Configuration object declaration
+  const config = {
+    serverUrl: `http://${window.location.hostname}:${window.location.port}`,
+    updateInterval: 50,
+    maxTerminalLines: 1000
+  };
 
-      // WebSocket connection
-      let socket = null;
-      let connected = false;
-      let controlInterval = null;
-      let deadzone = 0.15; // Deadzone for joystick control
+  // Variable for following person mode
+  let isFollowingPerson = false;
 
-      // Control state
-      const controlState = {
-        forward: 0, // -100 to 100 (negative for backward)
-        turn: 0, // -100 to 100 (negative for left)
-      };
+  // WebSocket connection variables
+  let socket = null;
+  let connected = false;
+  let controlInterval = null;
+  let deadzone = 0.15; // Deadzone for joystick control
 
-      // DOM Elements
-      const connectButton = document.getElementById("connectButton");
-      const emergencyStopButton = document.getElementById(
-        "emergencyStopButton"
-      );
-      const connectionStatus = document.getElementById("connectionStatus");
-      const connectionIndicator = document.getElementById(
-        "connectionIndicator"
-      );
-      const speedValue = document.getElementById("speedValue");
-      const batteryValue = document.getElementById("batteryValue");
-      const videoFeed = document.getElementById("videoFeed");
-      const terminalContent = document.getElementById("terminalContent");
-      const directionIndicator = document.getElementById("directionIndicator");
-      const followPersonButton = document.getElementById("followPersonButton");
+  // Control state
+  const controlState = {
+    forward: 0, // -100 to 100 (negative for backward)
+    turn: 0,    // -100 to 100 (negative for left)
+  };
 
-      // Initialize trackpad
-      const trackpad = nipplejs.create({
-        zone: document.getElementById("trackpad"),
-        mode: "static",
-        position: { left: "50%", top: "50%" },
-        color: "#888",
-        size: 120,
+  // DOM Elements
+  // Note: The connect button is no longer used; its element reference is removed.
+  const emergencyStopButton = document.getElementById("emergencyStopButton");
+  const connectionStatus = document.getElementById("connectionStatus");
+  const connectionIndicator = document.getElementById("connectionIndicator");
+  const speedValue = document.getElementById("speedValue");
+  const batteryValue = document.getElementById("batteryValue");
+  const videoFeed = document.getElementById("videoFeed");
+  const terminalContent = document.getElementById("terminalContent");
+  const directionIndicator = document.getElementById("directionIndicator");
+  const followPersonButton = document.getElementById("followPersonButton");
+
+  // Initialize trackpad
+  const trackpad = nipplejs.create({
+    zone: document.getElementById("trackpad"),
+    mode: "static",
+    position: { left: "50%", top: "50%" },
+    color: "#888",
+    size: 120,
+  });
+
+  // Setup event listeners for other controls
+  emergencyStopButton.addEventListener("click", emergencyStop);
+  followPersonButton.addEventListener("click", toggleFollowPerson);
+
+  // Trackpad event handling
+  trackpad.on("move", (evt, data) => {
+    // Get joystick position and map it to tank controls
+
+    // Extract x and y coordinates (-1 to 1)
+    const y = -1 * Math.min(data.distance / 60, 1) * Math.cos(data.angle.radian - Math.PI / 2);
+    const x = -1 * Math.min(data.distance / 60, 1) * Math.sin(data.angle.radian - Math.PI / 2);
+
+    // Map y to forward/backward (-100 to 100)
+    let forward = -y * 100; // Negative because joystick y is inverted
+    if (Math.abs(y) < deadzone) {
+      forward = 0;
+    }
+
+    // Map x to turning left/right (-100 to 100) with a deadzone
+    let turn = x * 100;
+    if (Math.abs(x) < deadzone) {
+      turn = 0;
+    }
+
+    controlState.forward = Math.round(forward);
+    controlState.turn = Math.round(turn);
+
+    // Update UI displays
+    updateSpeedDisplay(Math.abs(Math.round(forward)));
+    updateDirectionIndicator(forward, turn);
+  });
+
+  trackpad.on("end", () => {
+    // Reset control state when trackpad is released
+    controlState.forward = 0;
+    controlState.turn = 0;
+    updateSpeedDisplay(0);
+    updateDirectionIndicator(0, 0);
+  });
+
+  // Functions for WebSocket handling and control data emission
+  function connect() {
+    try {
+      addTerminalLine("Initializing connection to tank...");
+
+      // Establish the Socket.IO connection
+      socket = io(config.serverUrl);
+
+      socket.on("connect", () => {
+        connected = true;
+        updateConnectionStatus("Connected", true);
+        addTerminalLine("Connection established!");
+        controlInterval = setInterval(sendControlData, config.updateInterval);
       });
 
-      // Setup event listeners
-      connectButton.addEventListener("click", toggleConnection);
-      emergencyStopButton.addEventListener("click", emergencyStop);
-      followPersonButton.addEventListener("click", toggleFollowPerson);
-
-      // Trackpad event handling
-      trackpad.on("move", (evt, data) => {
-        // Get position from joystick
-        // We need to correctly map this to tank controls
-
-        // Extract x and y coordinates (-1 to 1)
-        // Normalize to ensure proper control mapping
-        const y =
-          -1 *
-          Math.min(data.distance / 60, 1) *
-          Math.cos(data.angle.radian - Math.PI / 2);
-        const x =
-          -1 *
-          Math.min(data.distance / 60, 1) *
-          Math.sin(data.angle.radian - Math.PI / 2);
-
-        // Map y to forward/backward (-100 to 100)
-        // Map x to turning left/right (-100 to 100)
-        let forward = -y * 100; // Negative because joystick y is inverted
-        if (Math.abs(y) < deadzone) {
-          forward = 0; // Deadzone - no movement
-        }
-
-        // Add a "deadzone" for turning to allow for small deviations
-        // If x is within ±10% of center, consider it a straight movement
-        let turn = x * 100;
-        if (Math.abs(x) < deadzone) {
-          turn = 0; // Deadzone - no turning
-        }
-
-        controlState.forward = Math.round(forward);
-        controlState.turn = Math.round(turn);
-
-        // Update speed display and direction indicator
-        // Make sure speed is shown as 100% when fully pushed
-        updateSpeedDisplay(Math.abs(Math.round(forward)));
-        updateDirectionIndicator(forward, turn);
-      });
-
-      trackpad.on("end", () => {
-        // Reset controls when trackpad is released
-        controlState.forward = 0;
-        controlState.turn = 0;
-        updateSpeedDisplay(0);
-        updateDirectionIndicator(0, 0);
-      });
-
-      // Functions
-      function toggleConnection() {
-        if (connected) {
-          disconnect();
-        } else {
-          connect();
-        }
-      }
-
-      function connect() {
-        try {
-          addTerminalLine("Initializing connection to tank...");
-
-          // Use the same host & port as the page
-          socket = io(config.serverUrl);
-
-          socket.on("connect", () => {
-            connected = true;
-            updateConnectionStatus("Connected", true);
-            connectButton.textContent = "Disconnect";
-            addTerminalLine("Connection established!");
-            controlInterval = setInterval(
-              sendControlData,
-              config.updateInterval
-            );
-          });
-
-          socket.on("disconnect", () => {
-            addTerminalLine("Connection closed.");
-            handleDisconnect();
-          });
-
-          socket.on("log", (message) => {
-            addTerminalLine(message);
-          });
-
-          socket.on("telemetry", (data) => {
-            updateTelemetry(data);
-          });
-
-          socket.on("emergency_stop_activated", () => {
-            addTerminalLine("!! EMERGENCY STOP ACTIVATED !!");
-          });
-
-          socket.on("connect_error", (error) => {
-            addTerminalLine("WebSocket connection error.");
-            console.error("WebSocket connection error:", error);
-            handleDisconnect();
-          });
-        } catch (error) {
-          addTerminalLine(`Connection error: ${error.message}`);
-          console.error("Connection error:", error);
-          handleDisconnect();
-        }
-      }
-
-      function disconnect() {
-        addTerminalLine("Disconnecting from tank...");
-        if (socket) {
-          socket.close();
-        }
+      socket.on("disconnect", () => {
+        addTerminalLine("Connection closed.");
         handleDisconnect();
+      });
+
+      socket.on("video_frame", (data) => {
+        // Update the video feed by setting the src attribute to a data URL.
+        document.getElementById("videoFeed").src = "data:image/jpeg;base64," + data;
+      });
+
+      socket.on("log", (message) => {
+        addTerminalLine(message);
+      });
+
+      socket.on("telemetry", (data) => {
+        updateTelemetry(data);
+      });
+
+      socket.on("emergency_stop_activated", () => {
+        addTerminalLine("!! EMERGENCY STOP ACTIVATED !!");
+      });
+
+      socket.on("connect_error", (error) => {
+        addTerminalLine("WebSocket connection error.");
+        console.error("WebSocket connection error:", error);
+        handleDisconnect();
+      });
+    } catch (error) {
+      addTerminalLine(`Connection error: ${error.message}`);
+      console.error("Connection error:", error);
+      handleDisconnect();
+    }
+  }
+
+  function disconnect() {
+    addTerminalLine("Disconnecting from tank...");
+    if (socket) {
+      socket.close();
+    }
+    handleDisconnect();
+  }
+
+  function handleDisconnect() {
+    connected = false;
+    updateConnectionStatus("Disconnected", false);
+    if (controlInterval) {
+      clearInterval(controlInterval);
+      controlInterval = null;
+    }
+    controlState.forward = 0;
+    controlState.turn = 0;
+    updateSpeedDisplay(0);
+    batteryValue.textContent = "--";
+    updateDirectionIndicator(0, 0);
+  }
+
+  function updateConnectionStatus(status, isConnected) {
+    connectionStatus.textContent = status;
+    if (isConnected) {
+      connectionIndicator.classList.add("connected");
+    } else {
+      connectionIndicator.classList.remove("connected");
+    }
+  }
+
+  function sendControlData() {
+    if (!connected || !socket) return;
+    socket.emit("control", controlState);
+  }
+
+  function updateTelemetry(data) {
+    if (data.battery !== undefined) {
+      batteryValue.textContent = data.battery;
+    }
+    if (data.current_motion !== undefined) {
+      let direction = "STOPPED";
+      switch (data.current_motion) {
+        case "F": direction = "FORWARD"; break;
+        case "B": direction = "BACKWARD"; break;
+        case "L": direction = "TURN LEFT"; break;
+        case "R": direction = "TURN RIGHT"; break;
+        case "S": direction = "STOPPED"; break;
       }
+      directionIndicator.textContent = direction;
+    }
+    if (data.auto_navigation !== undefined) {
+      isFollowingPerson = data.auto_navigation;
+      updateFollowPersonButton();
+    }
+  }
 
-      function handleDisconnect() {
-        connected = false;
-        updateConnectionStatus("Disconnected", false);
-        connectButton.textContent = "Connect";
+  function updateSpeedDisplay(speed) {
+    if (speed > 99) {
+      speed = 100;
+    }
+    speedValue.textContent = Math.abs(Math.round(speed));
+  }
 
-        if (controlInterval) {
-          clearInterval(controlInterval);
-          controlInterval = null;
-        }
+  function updateDirectionIndicator(forward, turn) {
+    let direction = "STOPPED";
+    if (Math.abs(forward) < 10 && Math.abs(turn) < 10) {
+      direction = "STOPPED";
+    } else if (forward > 10 && Math.abs(turn) < 30) {
+      direction = "FORWARD";
+    } else if (forward < -10 && Math.abs(turn) < 30) {
+      direction = "BACKWARD";
+    } else if (forward > 10 && turn > 30) {
+      direction = "FORWARD RIGHT";
+    } else if (forward > 10 && turn < -30) {
+      direction = "FORWARD LEFT";
+    } else if (forward < -10 && turn > 30) {
+      direction = "BACKWARD RIGHT";
+    } else if (forward < -10 && turn < -30) {
+      direction = "BACKWARD LEFT";
+    } else if (Math.abs(forward) < 30 && turn > 30) {
+      direction = "TURN RIGHT";
+    } else if (Math.abs(forward) < 30 && turn < -30) {
+      direction = "TURN LEFT";
+    }
+    directionIndicator.textContent = direction;
+  }
 
-        // Reset control state
-        controlState.forward = 0;
-        controlState.turn = 0;
+  function emergencyStop() {
+    addTerminalLine("!! EMERGENCY STOP INITIATED !!");
+    controlState.forward = 0;
+    controlState.turn = 0;
+    updateSpeedDisplay(0);
+    updateDirectionIndicator(0, 0);
+    if (connected && socket) {
+      socket.emit("emergency_stop", {});
+    } else {
+      fetch("/emergency_stop");
+    }
+  }
 
-        updateSpeedDisplay(0);
-        batteryValue.textContent = "--";
-        updateDirectionIndicator(0, 0);
-      }
+  function addTerminalLine(text) {
+    const timestamp = new Date().toLocaleTimeString();
+    const newLine = document.createElement("div");
+    newLine.className = "terminal-line";
+    newLine.textContent = `[${timestamp}] ${text}`;
+    terminalContent.appendChild(newLine);
+    while (terminalContent.children.length > config.maxTerminalLines) {
+      terminalContent.removeChild(terminalContent.firstChild);
+    }
+    terminalContent.scrollTop = terminalContent.scrollHeight;
+  }
 
-      function updateConnectionStatus(status, isConnected) {
-        connectionStatus.textContent = status;
-        if (isConnected) {
-          connectionIndicator.classList.add("connected");
-        } else {
-          connectionIndicator.classList.remove("connected");
-        }
-      }
-
-      function sendControlData() {
-        if (!connected || !socket) return;
-        socket.emit("control", controlState);
-      }
-
-      function updateTelemetry(data) {
-        if (data.battery !== undefined) {
-          batteryValue.textContent = data.battery;
-        }
-
-        // Map motion codes to directions
-        if (data.current_motion !== undefined) {
-          let direction = "STOPPED";
-          switch(data.current_motion) {
-            case "F": direction = "FORWARD"; break;
-            case "B": direction = "BACKWARD"; break;
-            case "L": direction = "TURN LEFT"; break;
-            case "R": direction = "TURN RIGHT"; break;
-            case "S": direction = "STOPPED"; break;
-          }
-          directionIndicator.textContent = direction;
-        }
-        
-        // Update follow person button state based on auto_navigation status
-        if (data.auto_navigation !== undefined) {
-          isFollowingPerson = data.auto_navigation;
-          updateFollowPersonButton();
-        }
-      }
-
-      function updateSpeedDisplay(speed) {
-        // Ensure we display full 100% when at max speed
-        if (speed > 99) {
-          speed = 100;
-        }
-        speedValue.textContent = Math.abs(Math.round(speed));
-      }
-
-      function updateDirectionIndicator(forward, turn) {
-        let direction = "STOPPED";
-
-        if (Math.abs(forward) < 10 && Math.abs(turn) < 10) {
-          direction = "STOPPED";
-        } else if (forward > 10 && Math.abs(turn) < 30) {
-          direction = "FORWARD";
-        } else if (forward < -10 && Math.abs(turn) < 30) {
-          direction = "BACKWARD";
-        } else if (forward > 10 && turn > 30) {
-          direction = "FORWARD RIGHT";
-        } else if (forward > 10 && turn < -30) {
-          direction = "FORWARD LEFT";
-        } else if (forward < -10 && turn > 30) {
-          direction = "BACKWARD RIGHT";
-        } else if (forward < -10 && turn < -30) {
-          direction = "BACKWARD LEFT";
-        } else if (Math.abs(forward) < 30 && turn > 30) {
-          direction = "TURN RIGHT";
-        } else if (Math.abs(forward) < 30 && turn < -30) {
-          direction = "TURN LEFT";
-        }
-
-        directionIndicator.textContent = direction;
-      }
-
-      function emergencyStop() {
-        addTerminalLine("!! EMERGENCY STOP INITIATED !!");
-        controlState.forward = 0;
-        controlState.turn = 0;
-        updateSpeedDisplay(0);
-        updateDirectionIndicator(0, 0);
-
-        if (connected && socket) {
-          socket.emit("emergency_stop", {});
-        } else {
-          // If not connected via socket, use HTTP fallback
-          fetch("/emergency_stop");
-        }
-      }
-
-      function addTerminalLine(text) {
-        const timestamp = new Date().toLocaleTimeString();
-        const newLine = document.createElement("div");
-        newLine.className = "terminal-line";
-        newLine.textContent = `[${timestamp}] ${text}`;
-        terminalContent.appendChild(newLine);
-
-        // Trim old lines if there are too many
-        while (terminalContent.children.length > config.maxTerminalLines) {
-          terminalContent.removeChild(terminalContent.firstChild);
-        }
-
-        // Auto-scroll to bottom (VS Code terminal behavior)
-        terminalContent.scrollTop = terminalContent.scrollHeight;
-      }
-
-      // Initialize the interface
-      // Toggle follow person functionality
-      function toggleFollowPerson() {
-        if (!connected) {
-          addTerminalLine("Cannot toggle follow mode: Not connected");
-          return;
-        }
-        
-        fetch('/toggle_navigation')
-          .then(response => response.text())
-          .then(text => {
-            addTerminalLine(text);
-            isFollowingPerson = !isFollowingPerson;
-            updateFollowPersonButton();
-          })
-          .catch(error => {
-            addTerminalLine(`Error toggling follow mode: ${error}`);
-          });
-      }
-      
-      function updateFollowPersonButton() {
-        followPersonButton.textContent = isFollowingPerson ? "Stop Following" : "Follow Person";
-        followPersonButton.style.backgroundColor = isFollowingPerson ? "#3bba54" : "#2d2d2d";
-      }
-        
-      function init() {
-        // Add initial terminal messages
-        addTerminalLine("RC Tank Control Interface initialized");
-        addTerminalLine("Click 'Connect' to establish a connection");
-        
-        // Update the UI
-        updateConnectionStatus("Disconnected", false);
-        updateSpeedDisplay(0);
-        updateDirectionIndicator(0, 0);
+  // Toggle follow person functionality
+  function toggleFollowPerson() {
+    if (!connected) {
+      addTerminalLine("Cannot toggle follow mode: Not connected");
+      return;
+    }
+    fetch('/toggle_navigation')
+      .then(response => response.text())
+      .then(text => {
+        addTerminalLine(text);
+        isFollowingPerson = !isFollowingPerson;
         updateFollowPersonButton();
-        
-        // Connect automatically if already at the server
-        if (window.location.hostname !== "localhost" && 
-            window.location.hostname !== "127.0.0.1") {
-          setTimeout(connect, 1000);
-        }
+      })
+      .catch(error => {
+        addTerminalLine(`Error toggling follow mode: ${error}`);
+      });
+  }
+
+  function updateFollowPersonButton() {
+    followPersonButton.textContent = isFollowingPerson ? "Stop Following" : "Follow Person";
+    followPersonButton.style.backgroundColor = isFollowingPerson ? "#3bba54" : "#2d2d2d";
+  }
+
+  // Initialization: automatically connect on load
+  function init() {
+    addTerminalLine("RC Tank Control Interface initialized");
+    addTerminalLine("Automatically connecting to tank...");
+    updateConnectionStatus("Disconnected", false);
+    updateSpeedDisplay(0);
+    updateDirectionIndicator(0, 0);
+    updateFollowPersonButton();
+    connect();  // Automatically call connect()
+  }
+
+  // Prevent scrolling on iPad when using the trackpad
+  document.addEventListener(
+    "touchmove",
+    function (e) {
+      if (e.target.closest("#trackpad")) {
+        e.preventDefault();
       }
+    },
+    { passive: false }
+  );
 
-      // Prevent scrolling on iPad when using trackpad
-      document.addEventListener(
-        "touchmove",
-        function (e) {
-          if (e.target.closest("#trackpad")) {
-            e.preventDefault();
-          }
-        },
-        { passive: false }
-      );
+  window.addEventListener("load", init);
+</script>
 
-      // Start the application
-      window.addEventListener("load", init);
-    </script>
+    
   </body>
 </html>

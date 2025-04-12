@@ -35,8 +35,8 @@ class RobotMap:
         self.angle = 90  # 0 = right, 90 = up, 180 = left, 270 = down
         
         # Movement parameters
-        self.move_distance = 0.2  # Grid cells per movement command
-        self.turn_angle = 2     # Degrees per turn command
+        self.move_distance = 1  # Grid cells per movement command
+        self.turn_angle = 90     # Degrees per turn command
         
         # Track path history
         self.path = [(self.pos_x, self.pos_y)]
@@ -60,6 +60,16 @@ class RobotMap:
         pygame.display.set_caption("Robot Map")
         self.font = pygame.font.SysFont(None, 24)
     
+    def reset_position(self):
+        """
+        Reset the robot's position and orientation to the default start values.
+        """
+        self.pos_x = self.grid_size / 2
+        self.pos_y = self.grid_size / 2
+        self.angle = 90
+        self.path = [(self.pos_x, self.pos_y)]
+        logger.info("RobotMap position reset to start values.")
+
     def _handle_events(self):
         """Handle pygame events"""
         for event in pygame.event.get():
@@ -84,6 +94,30 @@ class RobotMap:
                     self.angle = 90
                     self.path = [(self.pos_x, self.pos_y)]
     
+    def update_values(self, distance, angle):
+        """
+        Update the move_distance and turn_angle values.
+
+        Args:
+            distance (float): New grid cells per movement command.
+            angle (float): New turn angle in degrees per command.
+        Returns:
+            bool: True if the values were updated successfully, False otherwise.
+        """
+        try:
+            distance_val = float(distance)
+            angle_val = float(angle)
+            if distance_val <= 0 or angle_val <= 0:
+                logger.warning(f"Invalid calibration values: distance={distance_val}, angle={angle_val}")
+                return False
+            self.move_distance = distance_val
+            self.turn_angle = angle_val
+            logger.info(f"Updated calibration: move_distance set to {self.move_distance}, turn_angle set to {self.turn_angle}")
+            return True
+        except Exception as e:
+            logger.error(f"Error updating calibration values: {e}")
+            return False
+
     def apply_calibration(self, distance=None, angle=None):
         """
         Updates the simulation parameters based on calibration values.
@@ -147,8 +181,8 @@ class RobotMap:
     def _draw_robot(self):
         """Draw the robot as an arrow"""
         # Convert grid coordinates to screen coordinates
-        center_x = int(self.pos_x * self.cell_size)
-        center_y = int(self.pos_y * self.cell_size)
+        center_x = int((self.pos_x + 0.5) * self.cell_size)
+        center_y = int((self.pos_y + 0.5) * self.cell_size)
         
         # Draw a circle at the robot's position
         pygame.draw.circle(self.screen, (255, 255, 0), (center_x, center_y), 8)
@@ -183,7 +217,7 @@ class RobotMap:
             return
             
         # Convert path points to screen coordinates
-        screen_points = [(x * self.cell_size, y * self.cell_size) for x, y in self.path]
+        screen_points = [((x + 0.5) * self.cell_size, (y + 0.5) * self.cell_size) for x, y in self.path]
         
         # Draw a line connecting the points
         pygame.draw.lines(self.screen, (0, 128, 255), False, screen_points, 2)

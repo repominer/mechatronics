@@ -78,8 +78,10 @@ class MotorController:
             # Motor B
             self.in3_pin = 19
             self.in4_pin = 26
+
+            self.magnet_pin = 29
             
-            self.motor_pins = [self.in1_pin, self.in2_pin, self.in3_pin, self.in4_pin]
+            self.motor_pins = [self.in1_pin, self.in2_pin, self.in3_pin, self.in4_pin, self.magnet_pin]
             
             # Set up GPIO
             GPIO.setmode(GPIO.BOARD)
@@ -158,6 +160,7 @@ class MotorController:
             GPIO.output(self.in3_pin, GPIO.LOW)
             GPIO.output(self.in4_pin, GPIO.HIGH)
             logger.debug("Motors: Turning Right")
+    
             
         elif command == self.CMD_LEFT:  # Left - right motor forward, left motor backward
             GPIO.output(self.in1_pin, GPIO.LOW)
@@ -165,14 +168,18 @@ class MotorController:
             GPIO.output(self.in3_pin, GPIO.HIGH)
             GPIO.output(self.in4_pin, GPIO.LOW)
             logger.debug("Motors: Turning Left")
+        
+        elif command == self.MAGN_ON:  # Stop - all motors stopped
+            GPIO.output(self.magnet_pin, GPIO.HIGH)
+
+        elif command == self.MAGN_OFF:  # Stop - all motors stopped
+            GPIO.output(self.magnet_pin, GPIO.LOW)
             
         elif command == self.CMD_STOP:  # Stop - all motors stopped
             # All pins already set to LOW
             logger.debug("Motors: Stopped")
         
         return True
-
-    
 
     def process_joystick_input(self, forward, turn):
         """
